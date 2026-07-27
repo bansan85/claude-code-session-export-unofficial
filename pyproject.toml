@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "claude-code-session-export-unofficial"
+dynamic = ["version"]
+description = "Export and anonymize Anthropic Claude Code CLI session logs to readable Markdown (unofficial, community tool)."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Vincent Le Garrec", email = "github@le-garrec.fr" },
+]
+keywords = [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "cli",
+    "export",
+    "markdown",
+    "session",
+    "anonymization",
+    "unofficial",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Text Processing :: Markup :: Markdown",
+    "Topic :: Utilities",
+]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "ruff>=0.6", "mypy>=1.10", "build>=1.0"]
+
+[project.scripts]
+claude-code-session-export-unofficial = "claude_code_session_export_unofficial.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/bansan85/claude-code-session-export-unofficial"
+Repository = "https://github.com/bansan85/claude-code-session-export-unofficial"
+Issues = "https://github.com/bansan85/claude-code-session-export-unofficial/issues"
+Changelog = "https://github.com/bansan85/claude-code-session-export-unofficial/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/claude_code_session_export_unofficial/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/claude_code_session_export_unofficial"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
