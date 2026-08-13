@@ -190,13 +190,58 @@ def render_slash_command(text: str) -> str | None:
     return f"{header}\n\n```\n{args}\n```"
 
 
+_INVOKE_HEADER_RE = re.compile(
+    r"Invoke:\s*(?P<tool>[A-Za-z_]\w*)\(\{(?P<body>.*)\}\)\s*\Z", re.DOTALL
+)
+_INVOKE_FIELD_RE = re.compile(r'(?P<key>\w+):\s*"(?P<value>(?:[^"\\]|\\.)*)"')
+
+
+def render_tool_invocation(text: str) -> str | None:
+    """Formats a trailing ``Invoke: Workflow({ name: "...", args: "..." })``
+    call, which Claude Code appends (as plain text, not a real ``tool_use``
+    block) to the system-injected description of a workflow-based skill.
+
+    The ``args`` value is a JSON-escaped string -- often a multi-line prompt
+    of thousands of characters -- so rendered as-is it shows up as a single
+    line with literal ``\\n`` sequences. Splits the call into its fields and
+    unescapes them, giving a long field like ``args`` its own collapsible
+    code block. Returns None if the text has no such trailing call, so the
+    caller falls back to normal rendering; text preceding the call (already
+    readable prose) is preserved as-is.
+    """
+    match = _INVOKE_HEADER_RE.search(text)
+    if not match:
+        return None
+
+    preamble = text[: match.start()].rstrip()
+    tool = match.group("tool")
+
+    parts = [f"**Invoke:** `{tool}`"]
+    for field_match in _INVOKE_FIELD_RE.finditer(match.group("body")):
+        key = field_match.group("key")
+        try:
+            value = json.loads(f'"{field_match.group("value")}"')
+        except ValueError:
+            value = field_match.group("value")
+        if "\n" in value:
+            parts.append(f"<details>\n<summary>{key}</summary>\n\n```\n{value}\n```\n\n</details>")
+        else:
+            parts.append(f"- `{key}`: {value}")
+
+    body_text = "\n\n".join(parts)
+    return f"{preamble}\n\n{body_text}" if preamble else body_text
+
+
 def render_user_text(text: str) -> str:
-    """Renders freeform message text: a slash-command block gets its
-    dedicated formatting, everything else falls back to IDE-selection
-    expansion."""
+    """Renders freeform message text: a slash-command block or a trailing
+    tool-invocation call gets its dedicated formatting, everything else
+    falls back to IDE-selection expansion."""
     slash_command = render_slash_command(text)
     if slash_command is not None:
         return slash_command
+    invocation = render_tool_invocation(text)
+    if invocation is not None:
+        return invocation
     return replace_ide_selection(text)
 
 

@@ -13,6 +13,7 @@ from claude_code_session_export_unofficial.markdown import (
     render_ide_selection,
     render_slash_command,
     render_tool_input,
+    render_tool_invocation,
     render_user_text,
     replace_ide_selection,
     session_to_markdown,
@@ -110,6 +111,41 @@ def test_render_slash_command_none_when_not_purely_tags() -> None:
     text = "some preamble <command-name>/model</command-name>"
     assert render_slash_command(text) is None
     assert render_slash_command("plain text, no tags here") is None
+
+
+def test_render_tool_invocation_splits_preamble_and_unescapes_args() -> None:
+    text = (
+        'Run the "deep-research" workflow.\n\n'
+        'Invoke: Workflow({ name: "deep-research", args: "# R\\u00d4LE\\n\\nDo the thing." })'
+    )
+    result = render_tool_invocation(text)
+    assert result is not None
+    assert result.startswith('Run the "deep-research" workflow.')
+    assert "**Invoke:** `Workflow`" in result
+    assert "- `name`: deep-research" in result
+    expected_args_block = (
+        "<details>\n<summary>args</summary>\n\n```\n# RÔLE\n\nDo the thing.\n```\n\n</details>"
+    )
+    assert expected_args_block in result
+    # The multi-line args value must not leak onto a single escaped line.
+    assert "\\n" not in result
+
+
+def test_render_tool_invocation_short_field_not_collapsed() -> None:
+    text = 'Invoke: Workflow({ name: "deep-research" })'
+    result = render_tool_invocation(text)
+    assert result == "**Invoke:** `Workflow`\n\n- `name`: deep-research"
+
+
+def test_render_tool_invocation_none_without_trailing_call() -> None:
+    assert render_tool_invocation("plain text, no invocation here") is None
+
+
+def test_render_user_text_renders_tool_invocation() -> None:
+    text = 'Invoke: Workflow({ name: "deep-research", args: "line one\\nline two" })'
+    result = render_user_text(text)
+    assert "**Invoke:** `Workflow`" in result
+    assert "line one\nline two" in result
 
 
 def test_render_user_text_falls_back_to_ide_selection() -> None:
