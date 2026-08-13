@@ -23,7 +23,11 @@ pytest tests/test_markdown.py::test_fmt_ts_none_empty_invalid_and_valid
 
 # Build the distributable wheel + sdist
 python -m build
+```
 
+If `ruff`/`mypy`/`pytest`/`python -m build` aren't found on `PATH` (e.g. a shell where the venv isn't activated), fall back to the project's local `.venv` interpreter: `.venv/Scripts/python.exe -m ruff check .` on Windows, `.venv/bin/python -m ruff check .` on Unix (`.venv` is gitignored, so it may not exist — run `pip install -e ".[dev]"` first if it doesn't).
+
+```bash
 # Run the CLI locally after editable install
 claude-code-session-export-unofficial <home_or_.claude_dir> <workspace> [options]
 ```
@@ -59,3 +63,7 @@ Key responsibilities per module:
 - Ruff config (`[tool.ruff]` / `[tool.ruff.lint]` in `pyproject.toml`): line length 100, target `py310`, rule set `E, F, I, UP, B, SIM, C4`.
 - Tests use `tmp_path` exclusively (no real filesystem/network); `tests/conftest.py`'s `fake_claude_home` fixture builds a complete fake `~/.claude` tree (projects, plans, file-history, session-env, session metadata) for integration-style tests in `test_export.py`. Because there's no `tests/__init__.py`, cross-file imports use `from conftest import FakeClaudeHome` (bare module import), not a relative import.
 - The version string lives in exactly one place: `__version__` in `src/claude_code_session_export_unofficial/__init__.py` — `pyproject.toml` reads it dynamically via `[tool.hatch.version]`, don't add a second version string anywhere.
+
+## Commit messages
+
+Follow the classic Git conventions: subject line ≤50 characters, body lines wrapped at ≤70 characters. Prefer fitting the whole message on the subject line alone (no body) whenever it's enough to convey the change.
