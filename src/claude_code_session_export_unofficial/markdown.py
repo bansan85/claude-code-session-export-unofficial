@@ -232,16 +232,222 @@ def render_tool_invocation(text: str) -> str | None:
     return f"{preamble}\n\n{body_text}" if preamble else body_text
 
 
+_TASK_NOTIFICATION_RE = re.compile(r"<task-notification>(.*?)</task-notification>", re.DOTALL)
+_TAG_RE = re.compile(r"<([\w-]+)>(.*?)</\1>", re.DOTALL)
+_RESULT_TRUNCATION_RE = re.compile(
+    r"\n?\.\.\. \(truncated (\d+) chars?, full result in (.+?)\)\s*\Z", re.DOTALL
+)
+
+
+def _extract_tags(text: str) -> dict[str, str]:
+    """Extracts a flat mapping of ``{tag_name: inner_text}`` for each
+    top-level ``<tag>...</tag>`` pair found in *text*, in order of
+    appearance (later duplicates win)."""
+    return {m.group(1): m.group(2) for m in _TAG_RE.finditer(text)}
+
+
+def _repair_truncated_json(text: str) -> str | None:
+    """Best-effort repair of JSON *text* cut off mid-value: closes an
+    unterminated string and any ``{``/``[`` left open at the point of
+    truncation. Returns None if *text* doesn't look like a JSON object or
+    array at all."""
+    if not text or text[0] not in "{[":
+        return None
+
+    in_string = False
+    escape = False
+    stack: list[str] = []
+    for ch in text:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]" and stack:
+            stack.pop()
+
+    closers = {"{": "}", "[": "]"}
+    suffix = ('"' if in_string else "") + "".join(closers[c] for c in reversed(stack))
+    return text + suffix
+
+
+def _parse_json_maybe_truncated(text: str) -> tuple[Any, str | None]:
+    """Parses *text* as JSON, tolerating the harness's own truncation marker
+    (appended when a Workflow/Agent result is too large to inline) and the
+    resulting mid-string/mid-structure cutoff.
+
+    Returns the parsed value (``None`` if parsing fails outright) and an
+    optional human-readable truncation note.
+    """
+    note = None
+    match = _RESULT_TRUNCATION_RE.search(text)
+    if match:
+        chars, path = match.groups()
+        note = f"harness output truncated at {int(chars):,} characters — full result in `{path}`"
+        text = text[: match.start()]
+
+    stripped = text.strip()
+    try:
+        return json.loads(stripped), note
+    except ValueError:
+        pass
+
+    repaired = _repair_truncated_json(stripped)
+    if repaired is not None:
+        try:
+            return json.loads(repaired), note
+        except ValueError:
+            pass
+    return None, note
+
+
+def _render_result_field(key: str, value: Any) -> str:
+    if isinstance(value, str):
+        if "\n" in value or len(value) > 150:
+            return f"<details>\n<summary>{key}</summary>\n\n```\n{value}\n```\n\n</details>"
+        return f"- **{key}**: {value}"
+    if isinstance(value, dict | list):
+        body = json.dumps(value, ensure_ascii=False, indent=2)
+        return f"<details>\n<summary>{key}</summary>\n\n```json\n{body}\n```\n\n</details>"
+    return f"- **{key}**: {json.dumps(value)}"
+
+
+def render_task_notification_result(raw: str) -> str:
+    """Decodes a task-notification's ``<result>`` payload (a JSON-stringified
+    value, possibly truncated by the harness) into Markdown: a dict's
+    top-level fields each get their own labelled subsection instead of being
+    dumped as a single opaque JSON blob; any other JSON shape is
+    pretty-printed whole; text that isn't JSON at all (or too badly
+    truncated to repair) falls back to a plain code block."""
+    value, note = _parse_json_maybe_truncated(raw)
+
+    parts: list[str] = []
+    if isinstance(value, dict) and value:
+        parts.extend(_render_result_field(k, v) for k, v in value.items())
+    elif value is not None:
+        parts.append(f"```json\n{json.dumps(value, ensure_ascii=False, indent=2)}\n```")
+    else:
+        parts.append(f"```\n{raw.strip()}\n```")
+    if note:
+        parts.append(f"*({note})*")
+    return "\n\n".join(parts)
+
+
+def _format_duration_ms(ms: int) -> str:
+    hours, remainder = divmod(ms // 1000, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes}m {seconds}s"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _format_usage_line(usage: dict[str, str]) -> str | None:
+    """Formats a task-notification's ``<usage>`` counters (agent/tool counts,
+    token spend, wall-clock duration) as one compact human-readable line.
+    Tolerates missing or non-numeric fields by simply omitting them, since
+    this is a best-effort summary, not the source of truth for the data."""
+    bits: list[str] = []
+    try:
+        if "agent_count" in usage and "agents_done" in usage:
+            agents = f"{usage['agents_done']}/{usage['agent_count']} agents"
+            details = []
+            if "agents_error" in usage:
+                details.append(f"{usage['agents_error']} errors")
+            if "agents_skipped" in usage:
+                details.append(f"{usage['agents_skipped']} skipped")
+            if details:
+                agents += f" ({', '.join(details)})"
+            bits.append(agents)
+        if "tool_uses" in usage:
+            bits.append(f"{int(usage['tool_uses']):,} tool calls")
+        if "subagent_tokens" in usage:
+            bits.append(f"{int(usage['subagent_tokens']):,} subagent tokens")
+        if "duration_ms" in usage:
+            bits.append(_format_duration_ms(int(usage["duration_ms"])))
+    except ValueError:
+        return None
+    return " · ".join(bits) if bits else None
+
+
+def render_task_notification(text: str) -> str | None:
+    """Formats a ``<task-notification>...</task-notification>`` block, which
+    Claude Code's harness injects as a queued user message once a background
+    Agent/Workflow tool call completes.
+
+    Rendered through the generic text path, this shows up as a wall of
+    escaped tags with an opaque, possibly truncated JSON ``<result>`` glued
+    to its neighbours. This instead extracts the known fields into a
+    compact header/metadata block and decodes ``<result>`` into one
+    labelled subsection per top-level field (see
+    ``render_task_notification_result``). Returns None if the text doesn't
+    contain such a block, so the caller falls back to normal rendering.
+    """
+    match = _TASK_NOTIFICATION_RE.search(text)
+    if not match:
+        return None
+
+    fields = _extract_tags(match.group(1))
+    task_id = fields.get("task-id", "").strip()
+    tool_use_id = fields.get("tool-use-id", "").strip()
+    status = fields.get("status", "").strip()
+
+    header = f"**Task notification** — `{task_id}`"
+    if tool_use_id:
+        header += f" (tool call `{tool_use_id}`)"
+    if status:
+        header += f" — status: **{status}**"
+    parts = [header]
+
+    summary = fields.get("summary", "").strip()
+    if summary:
+        parts.append(summary)
+
+    meta: list[str] = []
+    output_file = fields.get("output-file", "").strip()
+    if output_file:
+        meta.append(f"- **Output file**: `{output_file}`")
+    usage_line = _format_usage_line(_extract_tags(fields.get("usage", "")))
+    if usage_line:
+        meta.append(f"- **Usage**: {usage_line}")
+    if meta:
+        parts.append("\n".join(meta))
+
+    if "result" in fields:
+        parts.append("**Result**")
+        parts.append(render_task_notification_result(fields["result"]))
+
+    if "diagnostics" in fields:
+        diagnostics = fields["diagnostics"].strip()
+        parts.append(
+            f"<details>\n<summary>Diagnostics</summary>\n\n```\n{diagnostics}\n```\n\n</details>"
+        )
+
+    return "\n\n".join(parts)
+
+
 def render_user_text(text: str) -> str:
-    """Renders freeform message text: a slash-command block or a trailing
-    tool-invocation call gets its dedicated formatting, everything else
-    falls back to IDE-selection expansion."""
+    """Renders freeform message text: a slash-command block, a trailing
+    tool-invocation call, or a task-notification block each gets its
+    dedicated formatting, everything else falls back to IDE-selection
+    expansion."""
     slash_command = render_slash_command(text)
     if slash_command is not None:
         return slash_command
     invocation = render_tool_invocation(text)
     if invocation is not None:
         return invocation
+    task_notification = render_task_notification(text)
+    if task_notification is not None:
+        return task_notification
     return replace_ide_selection(text)
 
 

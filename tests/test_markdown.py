@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from claude_code_session_export_unofficial.markdown import (
+    _format_duration_ms,
     _guess_lang,
     escape_html_outside_code,
     fmt_ts,
@@ -12,6 +13,8 @@ from claude_code_session_export_unofficial.markdown import (
     render_edit_diff,
     render_ide_selection,
     render_slash_command,
+    render_task_notification,
+    render_task_notification_result,
     render_tool_input,
     render_tool_invocation,
     render_user_text,
@@ -146,6 +149,99 @@ def test_render_user_text_renders_tool_invocation() -> None:
     result = render_user_text(text)
     assert "**Invoke:** `Workflow`" in result
     assert "line one\nline two" in result
+
+
+def test_render_task_notification_full_block() -> None:
+    text = (
+        "<task-notification>\n"
+        "<task-id>abc123</task-id>\n"
+        "<tool-use-id>toolu_1</tool-use-id>\n"
+        "<output-file>C:\\out\\abc123.output</output-file>\n"
+        "<status>completed</status>\n"
+        '<summary>Workflow "demo" completed</summary>\n'
+        '<result>{"question": "short", "notes": "line one\\nline two"}</result>\n'
+        "<diagnostics>see journal.jsonl</diagnostics>\n"
+        "<usage><agent_count>3</agent_count><agents_done>3</agents_done>"
+        "<agents_error>0</agents_error><agents_skipped>0</agents_skipped>"
+        "<tool_uses>10</tool_uses><subagent_tokens>500</subagent_tokens>"
+        "<duration_ms>65000</duration_ms></usage>\n"
+        "</task-notification>"
+    )
+    result = render_task_notification(text)
+    assert result is not None
+    assert (
+        "**Task notification** — `abc123` (tool call `toolu_1`) — status: **completed**" in result
+    )
+    assert 'Workflow "demo" completed' in result
+    assert "- **Output file**: `C:\\out\\abc123.output`" in result
+    assert (
+        "- **Usage**: 3/3 agents (0 errors, 0 skipped) · 10 tool calls · "
+        "500 subagent tokens · 1m 5s" in result
+    )
+    assert "- **question**: short" in result
+    assert "<details>\n<summary>notes</summary>\n\n```\nline one\nline two\n```\n\n</details>" in (
+        result
+    )
+    assert (
+        "<details>\n<summary>Diagnostics</summary>\n\n```\nsee journal.jsonl\n```\n\n</details>"
+        in result
+    )
+
+
+def test_render_task_notification_none_without_tag() -> None:
+    assert render_task_notification("plain text, no notification here") is None
+
+
+def test_render_task_notification_result_decodes_short_and_long_fields() -> None:
+    raw = '{"question": "short", "notes": "line one\\nline two"}'
+    result = render_task_notification_result(raw)
+    assert "- **question**: short" in result
+    assert "<details>\n<summary>notes</summary>\n\n```\nline one\nline two\n```\n\n</details>" in (
+        result
+    )
+
+
+def test_render_task_notification_result_nested_value_gets_json_block() -> None:
+    raw = '{"items": [1, 2, 3]}'
+    result = render_task_notification_result(raw)
+    expected = (
+        "<details>\n<summary>items</summary>\n\n```json\n[\n  1,\n  2,\n  3\n]\n```\n\n</details>"
+    )
+    assert result == expected
+
+
+def test_render_task_notification_result_repairs_truncated_json() -> None:
+    raw = (
+        '{"question":"full question here","summary":"cut off mid sentence'
+        "\n... (truncated 42 chars, full result in C:\\out\\abc.output)"
+    )
+    result = render_task_notification_result(raw)
+    assert "- **question**: full question here" in result
+    assert "- **summary**: cut off mid sentence" in result
+    assert (
+        "*(harness output truncated at 42 characters — "
+        "full result in `C:\\out\\abc.output`)*" in result
+    )
+
+
+def test_render_task_notification_result_falls_back_to_raw_text() -> None:
+    assert render_task_notification_result("not json at all") == "```\nnot json at all\n```"
+
+
+def test_render_user_text_renders_task_notification() -> None:
+    text = (
+        "<task-notification>\n<task-id>xyz</task-id>\n<status>completed</status>\n"
+        '<result>{"ok": true}</result>\n</task-notification>'
+    )
+    result = render_user_text(text)
+    assert "**Task notification** — `xyz` — status: **completed**" in result
+    assert "- **ok**: true" in result
+
+
+def test_format_duration_ms_hours_minutes_and_seconds_only() -> None:
+    assert _format_duration_ms(3_661_000) == "1h 1m 1s"
+    assert _format_duration_ms(65_000) == "1m 5s"
+    assert _format_duration_ms(5_000) == "5s"
 
 
 def test_render_user_text_falls_back_to_ide_selection() -> None:
