@@ -11,7 +11,9 @@ from claude_code_session_export_unofficial.markdown import (
     render_content_block,
     render_edit_diff,
     render_ide_selection,
+    render_slash_command,
     render_tool_input,
+    render_user_text,
     replace_ide_selection,
     session_to_markdown,
     stringify_tool_result_content,
@@ -68,6 +70,61 @@ def test_replace_ide_selection_embeds_result_in_surrounding_text() -> None:
     result = replace_ide_selection(text)
     assert result.startswith("before **Attachment**")
     assert result.endswith("after")
+
+
+def test_render_slash_command_with_args_and_redundant_message() -> None:
+    text = (
+        "<command-message>deep-research</command-message>\n"
+        "<command-name>/deep-research</command-name>\n"
+        "<command-args># RÔLE\n\nDo the thing.</command-args>"
+    )
+    result = render_slash_command(text)
+    assert result == "**Slash command:** `/deep-research`\n\n```\n# RÔLE\n\nDo the thing.\n```"
+
+
+def test_render_slash_command_without_args() -> None:
+    text = "<command-message>clear</command-message>\n<command-name>/clear</command-name>"
+    assert render_slash_command(text) == "**Slash command:** `/clear`"
+
+
+def test_render_slash_command_shows_distinct_message() -> None:
+    text = (
+        "<command-message>Runs the deep-research skill</command-message>\n"
+        "<command-name>/deep-research</command-name>"
+    )
+    result = render_slash_command(text)
+    assert result == "**Slash command:** `/deep-research` — Runs the deep-research skill"
+
+
+def test_render_slash_command_tolerates_tag_order_and_whitespace() -> None:
+    text = (
+        "<command-name>/model</command-name>\n            "
+        "<command-message>model</command-message>\n            "
+        "<command-args>opus[1m]</command-args>"
+    )
+    result = render_slash_command(text)
+    assert result == "**Slash command:** `/model`\n\n```\nopus[1m]\n```"
+
+
+def test_render_slash_command_none_when_not_purely_tags() -> None:
+    text = "some preamble <command-name>/model</command-name>"
+    assert render_slash_command(text) is None
+    assert render_slash_command("plain text, no tags here") is None
+
+
+def test_render_user_text_falls_back_to_ide_selection() -> None:
+    text = "before <ide_selection>The user selected line 1 from a.py:\nx = 1</ide_selection> after"
+    assert render_user_text(text) == replace_ide_selection(text)
+
+
+def test_render_content_block_text_renders_slash_command() -> None:
+    block = render_content_block(
+        {
+            "type": "text",
+            "text": "<command-message>clear</command-message>\n<command-name>/clear</command-name>",
+        }
+    )
+    assert block == "**Slash command:** `/clear`"
 
 
 def test_render_edit_diff_produces_unified_diff() -> None:

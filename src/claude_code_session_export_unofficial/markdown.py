@@ -156,6 +156,50 @@ def replace_ide_selection(text: str) -> str:
     return IDE_SELECTION_RE.sub(lambda m: render_ide_selection(m.group(1)), text)
 
 
+_COMMAND_TAG_RE = re.compile(r"<command-(message|name|args)>(.*?)</command-\1>", re.DOTALL)
+
+
+def render_slash_command(text: str) -> str | None:
+    """Formats a slash-command invocation (e.g. ``/deep-research``), which
+    Claude Code stores in the raw user message as ``<command-message>``,
+    ``<command-name>`` and ``<command-args>`` tags.
+
+    Rendered through the generic text path, these show up as literal
+    escaped tags, and a multi-line ``command-args`` value is often itself
+    Markdown (headings, tables, code fences) that would otherwise bleed into
+    the export's own heading hierarchy. Returns None if the text isn't
+    (purely) such a block, so the caller falls back to normal rendering.
+    """
+    tags: dict[str, str] = {}
+    remainder = text
+    for match in _COMMAND_TAG_RE.finditer(text):
+        tags[match.group(1)] = match.group(2)
+        remainder = remainder.replace(match.group(0), "", 1)
+    if "name" not in tags or remainder.strip():
+        return None
+
+    name = tags["name"].strip()
+    message = tags.get("message", "").strip()
+    args = tags.get("args", "").strip()
+
+    header = f"**Slash command:** `{name}`"
+    if message and message.lstrip("/") != name.lstrip("/"):
+        header += f" — {message}"
+    if not args:
+        return header
+    return f"{header}\n\n```\n{args}\n```"
+
+
+def render_user_text(text: str) -> str:
+    """Renders freeform message text: a slash-command block gets its
+    dedicated formatting, everything else falls back to IDE-selection
+    expansion."""
+    slash_command = render_slash_command(text)
+    if slash_command is not None:
+        return slash_command
+    return replace_ide_selection(text)
+
+
 def render_edit_diff(input_: dict[str, Any]) -> str:
     """Builds a unified diff (```diff style) between old_string and
     new_string for an Edit tool call."""
@@ -202,7 +246,7 @@ def render_content_block(block: dict[str, Any]) -> str:
     btype = block.get("type")
 
     if btype == "text":
-        return replace_ide_selection(block.get("text", ""))
+        return render_user_text(block.get("text", ""))
 
     if btype == "thinking":
         text = block.get("thinking", "")
@@ -319,7 +363,7 @@ def session_to_markdown(events: list[dict[str, Any]], session_id: str, workspace
 
         blocks_text: list[str]
         if isinstance(content, str):
-            blocks_text = [replace_ide_selection(content)] if content.strip() else []
+            blocks_text = [render_user_text(content)] if content.strip() else []
         elif isinstance(content, list):
             blocks_text = [render_content_block(b) for b in content]
             blocks_text = [b for b in blocks_text if b.strip()]
