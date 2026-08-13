@@ -176,6 +176,28 @@ def render_edit_diff(input_: dict[str, Any]) -> str:
     return "\n".join(diff_lines)
 
 
+def render_tool_input(input_: dict[str, Any]) -> str:
+    """Renders a tool call's input fields (minus ``description``, already
+    shown in the header) as Markdown.
+
+    A naive ``json.dumps`` of the whole dict turns any multi-line string
+    value (e.g. a Workflow script, a long prompt) into a single escaped
+    line with literal ``\\n`` sequences -- unreadable, and can span tens of
+    thousands of characters. Such values get their own collapsible block
+    (same ``<details>`` pattern as "Thinking" sections) instead; the
+    remaining scalar fields are kept together as compact JSON.
+    """
+    multiline = {k: v for k, v in input_.items() if isinstance(v, str) and "\n" in v}
+    scalars = {k: v for k, v in input_.items() if k not in multiline}
+
+    parts: list[str] = []
+    if scalars:
+        parts.append(f"```json\n{json.dumps(scalars, ensure_ascii=False, indent=2)}\n```")
+    for key, value in multiline.items():
+        parts.append(f"<details>\n<summary>{key}</summary>\n\n```\n{value}\n```\n\n</details>")
+    return "\n\n".join(parts) if parts else "```json\n{}\n```"
+
+
 def render_content_block(block: dict[str, Any]) -> str:
     btype = block.get("type")
 
@@ -207,15 +229,14 @@ def render_content_block(block: dict[str, Any]) -> str:
         if isinstance(input_, dict) and "command" in input_ and isinstance(input_["command"], str):
             body = input_["command"]
             lang = "powershell" if name.lower() == "powershell" else "bash"
-        else:
-            rest = (
-                {k: v for k, v in input_.items() if k != "description"}
-                if isinstance(input_, dict)
-                else input_
-            )
-            body = json.dumps(rest, ensure_ascii=False, indent=2)
-            lang = "json"
-        return f"{header}\n```{lang}\n{body}\n```"
+            return f"{header}\n```{lang}\n{body}\n```"
+
+        if isinstance(input_, dict):
+            rest = {k: v for k, v in input_.items() if k != "description"}
+            return f"{header}\n{render_tool_input(rest)}"
+
+        body = json.dumps(input_, ensure_ascii=False, indent=2)
+        return f"{header}\n```json\n{body}\n```"
 
     if btype == "tool_result":
         content = block.get("content", "")

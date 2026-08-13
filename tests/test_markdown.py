@@ -11,6 +11,7 @@ from claude_code_session_export_unofficial.markdown import (
     render_content_block,
     render_edit_diff,
     render_ide_selection,
+    render_tool_input,
     replace_ide_selection,
     session_to_markdown,
     stringify_tool_result_content,
@@ -138,6 +139,34 @@ def test_render_content_block_tool_use_generic_json() -> None:
     assert "**Tool call: `Glob`** — find files" in block
     assert '"pattern": "*.py"' in block
     assert "description" not in block.split("```json")[1]
+
+
+def test_render_content_block_tool_use_multiline_field_uses_collapsible_block() -> None:
+    script = "export const meta = {\n  name: 'x',\n}\n"
+    block = render_content_block(
+        {
+            "type": "tool_use",
+            "name": "Workflow",
+            "input": {"script": script, "description": "run it"},
+        }
+    )
+    assert "**Tool call: `Workflow`** — run it" in block
+    assert "<details>\n<summary>script</summary>" in block
+    assert script in block
+    # The raw script must not also appear JSON-escaped on a single line.
+    assert "\\n" not in block
+
+
+def test_render_tool_input_empty_dict_renders_empty_json() -> None:
+    assert render_tool_input({}) == "```json\n{}\n```"
+
+
+def test_render_tool_input_mixes_scalars_and_multiline_fields() -> None:
+    rendered = render_tool_input({"pattern": "*.py", "prompt": "line one\nline two"})
+    assert '```json\n{\n  "pattern": "*.py"\n}\n```' in rendered
+    assert "<details>\n<summary>prompt</summary>\n\n```\nline one\nline two\n```\n\n</details>" in (
+        rendered
+    )
 
 
 def test_stringify_tool_result_content_variants() -> None:
