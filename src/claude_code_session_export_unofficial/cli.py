@@ -55,7 +55,7 @@ from typing import Any
 
 from .anonymize import Anonymizer
 from .discovery import find_project_dirs, resolve_claude_dir
-from .export import export_session, write_index
+from .export import export_session, session_preview, write_index
 
 
 def main() -> None:
@@ -139,9 +139,12 @@ def main() -> None:
     if not jsonl_files:
         raise SystemExit("No sessions to export.")
 
+    previews = {f: session_preview(f) for f in jsonl_files}
+    jsonl_files.sort(key=lambda f: previews[f][1] or "")
+
     print(f"{len(jsonl_files)} session(s) to export:")
     for f in jsonl_files:
-        print(f"  - {f.stem}")
+        print(f"  - {f.stem} -> {previews[f][0]}")
     print()
 
     summaries: list[dict[str, Any]] = []

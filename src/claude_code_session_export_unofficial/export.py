@@ -3,13 +3,48 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from ._util import log
 from .anonymize import Anonymizer
 from .discovery import collect_plan_paths, load_jsonl
-from .markdown import session_to_markdown
+from .markdown import fmt_ts, session_to_markdown
+
+_INVALID_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_MAX_DIR_NAME_LENGTH = 150
+
+
+def sanitize_filename_component(text: str) -> str:
+    cleaned = _INVALID_FILENAME_CHARS_RE.sub("_", text).strip().rstrip(". ")
+    return cleaned[:_MAX_DIR_NAME_LENGTH].rstrip(". ") or "untitled"
+
+
+def build_session_dir_name(last_ts: str | None, title: str | None, session_id: str) -> str:
+    # ":" is invalid in Windows folder names, so the timestamp is rendered
+    # with dashes instead (still lexically sortable).
+    date_part = fmt_ts(last_ts).replace(":", "-") if last_ts else "unknown-date"
+    title_part = title.strip() if title and title.strip() else session_id
+    return sanitize_filename_component(f"{date_part} - {title_part}")
+
+
+def extract_title_and_last_ts(
+    events: list[dict[str, Any]],
+) -> tuple[str | None, str | None]:
+    title = next(
+        (e.get("aiTitle") for e in events if e.get("type") == "ai-title" and e.get("aiTitle")),
+        None,
+    )
+    last_ts = next((e["timestamp"] for e in reversed(events) if e.get("timestamp")), None)
+    return title, last_ts
+
+
+def session_preview(jsonl_file: Path) -> tuple[str, str | None]:
+    """Returns (dir_name, last_ts) for a session, loading its events once."""
+    events = load_jsonl(jsonl_file)
+    title, last_ts = extract_title_and_last_ts(events)
+    return build_session_dir_name(last_ts, title, jsonl_file.stem), last_ts
 
 
 def copy_tree_if_exists(src: Path, dst: Path, verbose: bool, anonymizer: Anonymizer) -> bool:
@@ -38,14 +73,15 @@ def export_session(
     verbose: bool,
 ) -> dict[str, Any]:
     session_id = jsonl_file.stem
-    session_out = output_root / session_id
+    events = load_jsonl(jsonl_file)
+    title, last_ts = extract_title_and_last_ts(events)
+
+    session_out = output_root / build_session_dir_name(last_ts, title, session_id)
     session_out.mkdir(parents=True, exist_ok=True)
 
     # 1) Raw conversation
     anonymizer.copy_file(jsonl_file, session_out / "session.jsonl")
     log(f"[{session_id}] conversation copied (session.jsonl)", verbose)
-
-    events = load_jsonl(jsonl_file)
 
     # 2) Markdown conversion
     md = session_to_markdown(events, session_id, workspace)
@@ -82,10 +118,6 @@ def export_session(
                 info_text = anonymizer.apply(json.dumps(data, ensure_ascii=False, indent=2))
                 (session_out / "session-info.json").write_text(info_text, encoding="utf-8")
 
-    title = next(
-        (e.get("aiTitle") for e in events if e.get("type") == "ai-title" and e.get("aiTitle")),
-        None,
-    )
     return {"session_id": session_id, "title": title, "plans": len(plan_paths)}
 
 
