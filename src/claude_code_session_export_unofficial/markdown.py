@@ -173,6 +173,36 @@ def render_slash_command(text: str) -> str | None:
     return f"{header}\n\n```\n{args}\n```"
 
 
+_LOCAL_COMMAND_TAG_RE = re.compile(
+    r"\A<local-command-(caveat|stdout|stderr)>(.*)</local-command-\1>\Z", re.DOTALL
+)
+_LOCAL_COMMAND_LABELS = {"stdout": "Local command output", "stderr": "Local command error"}
+
+
+def render_local_command(text: str) -> str | None:
+    """Formats a ``<local-command-caveat>``, ``<local-command-stdout>`` or
+    ``<local-command-stderr>`` block, which Claude Code sends as standalone
+    user messages surrounding a local slash command's execution (e.g. the
+    ``/model`` command's stdout).
+
+    Rendered through the generic text path, these show up as literal escaped
+    tags. The caveat is a fixed instruction to the assistant (not text typed
+    by the user), so it becomes an italic note; stdout/stderr becomes a
+    labelled code block, since command output can span multiple lines.
+    Returns None if the text isn't (purely) such a block, so the caller
+    falls back to normal rendering.
+    """
+    match = _LOCAL_COMMAND_TAG_RE.match(text.strip())
+    if not match:
+        return None
+
+    kind = match.group(1)
+    inner = match.group(2).strip()
+    if kind == "caveat":
+        return f"*{inner}*"
+    return f"**{_LOCAL_COMMAND_LABELS[kind]}**\n\n```\n{inner}\n```"
+
+
 _INVOKE_HEADER_RE = re.compile(
     r"Invoke:\s*(?P<tool>[A-Za-z_]\w*)\(\{(?P<body>.*)\}\)\s*\Z", re.DOTALL
 )
@@ -453,13 +483,16 @@ def render_task_notification(text: str) -> str | None:
 
 
 def render_user_text(text: str) -> str:
-    """Renders freeform message text: a slash-command block, a trailing
-    tool-invocation call, or a task-notification block each gets its
-    dedicated formatting, everything else falls back to IDE-selection
-    expansion."""
+    """Renders freeform message text: a slash-command block, a local-command
+    caveat/stdout/stderr block, a trailing tool-invocation call, or a
+    task-notification block each gets its dedicated formatting, everything
+    else falls back to IDE-selection expansion."""
     slash_command = render_slash_command(text)
     if slash_command is not None:
         return slash_command
+    local_command = render_local_command(text)
+    if local_command is not None:
+        return local_command
     invocation = render_tool_invocation(text)
     if invocation is not None:
         return invocation
