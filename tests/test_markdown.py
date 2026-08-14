@@ -179,6 +179,26 @@ def test_render_task_notification_full_block() -> None:
     assert "**Diagnostics**\n\n```\nsee journal.jsonl\n```" in result
 
 
+def test_render_task_notification_diagnostics_unescapes_embedded_call_args() -> None:
+    text = (
+        "<task-notification>\n"
+        "<task-id>abc123</task-id>\n"
+        "<status>completed</status>\n"
+        "<diagnostics>Per-agent results: C:\\out\\journal.jsonl\n"
+        "To re-run with edited post-processing: Workflow({scriptPath: "
+        "'C:\\\\out\\\\resume.js', resumeFromRunId: 'wf_1', "
+        'args: "line one\\nline two"}) '
+        "\u2014 agents whose (prompt, opts) are unchanged replay from cache.</diagnostics>\n"
+        "</task-notification>"
+    )
+    result = render_task_notification(text)
+    assert result is not None
+    assert "args: (see **args** below)" in result
+    assert "**args**\n\n```\nline one\nline two\n```" in result
+    # The multi-line args value must not leak onto a single escaped line.
+    assert "\\n" not in result
+
+
 def test_render_task_notification_none_without_tag() -> None:
     assert render_task_notification("plain text, no notification here") is None
 

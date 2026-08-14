@@ -323,6 +323,38 @@ def render_task_notification_result(raw: str) -> str:
     return "\n\n".join(parts)
 
 
+_DIAGNOSTICS_FIELD_RE = re.compile(
+    r"""(?P<key>\w+):\s*(?:'(?P<sval>[^']*)'|"(?P<dval>(?:[^"\\]|\\.)*)")"""
+)
+
+
+def _extract_long_quoted_fields(line: str, blocks: list[str]) -> str:
+    """Rewrites *line*, replacing any JSON-escaped ``key: "..."`` field whose
+    decoded value spans multiple lines with a short placeholder, appending
+    the decoded value as its own labelled fenced code block to *blocks*.
+
+    Diagnostics text sometimes embeds a resume-command call (e.g.
+    ``Workflow({scriptPath: '...', args: "...\\n..."})``) whose ``args`` is
+    itself a JSON-escaped multi-paragraph prompt; left inline it renders as
+    one unreadable line of literal ``\\n`` sequences.
+    """
+
+    def replace(match: re.Match[str]) -> str:
+        if match.group("dval") is None:
+            return match.group(0)
+        try:
+            value = json.loads(f'"{match.group("dval")}"')
+        except ValueError:
+            return match.group(0)
+        if "\n" not in value:
+            return match.group(0)
+        key = match.group("key")
+        blocks.append(f"**{key}**\n\n```\n{value}\n```")
+        return f"{key}: (see **{key}** below)"
+
+    return _DIAGNOSTICS_FIELD_RE.sub(replace, line)
+
+
 def _format_duration_ms(ms: int) -> str:
     hours, remainder = divmod(ms // 1000, 3600)
     minutes, seconds = divmod(remainder, 60)
@@ -409,8 +441,13 @@ def render_task_notification(text: str) -> str | None:
         parts.append(render_task_notification_result(fields["result"]))
 
     if "diagnostics" in fields:
-        diagnostics = fields["diagnostics"].strip()
+        blocks: list[str] = []
+        diagnostics = "\n".join(
+            _extract_long_quoted_fields(line, blocks)
+            for line in fields["diagnostics"].strip().splitlines()
+        )
         parts.append(f"**Diagnostics**\n\n```\n{diagnostics}\n```")
+        parts.extend(blocks)
 
     return "\n\n".join(parts)
 
