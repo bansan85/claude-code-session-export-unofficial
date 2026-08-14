@@ -32,11 +32,9 @@ def test_escape_html_outside_code_preserves_fences_and_inline_code() -> None:
     assert "`<username>`" in result
 
 
-def test_escape_html_outside_code_preserves_details_and_blockquote_prefix() -> None:
-    text = "<details>\n<summary>Thinking</summary>\n\n> quoted <tag>\n\n</details>"
+def test_escape_html_outside_code_preserves_blockquote_prefix() -> None:
+    text = "> quoted <tag>"
     result = escape_html_outside_code(text)
-    assert "<details>" in result
-    assert "</details>" in result
     assert "> quoted &lt;tag&gt;" in result
 
 
@@ -126,9 +124,7 @@ def test_render_tool_invocation_splits_preamble_and_unescapes_args() -> None:
     assert result.startswith('Run the "deep-research" workflow.')
     assert "**Invoke:** `Workflow`" in result
     assert "- `name`: deep-research" in result
-    expected_args_block = (
-        "<details>\n<summary>args</summary>\n\n```\n# RÔLE\n\nDo the thing.\n```\n\n</details>"
-    )
+    expected_args_block = "**args**\n\n```\n# RÔLE\n\nDo the thing.\n```"
     assert expected_args_block in result
     # The multi-line args value must not leak onto a single escaped line.
     assert "\\n" not in result
@@ -179,13 +175,8 @@ def test_render_task_notification_full_block() -> None:
         "500 subagent tokens · 1m 5s" in result
     )
     assert "- **question**: short" in result
-    assert "<details>\n<summary>notes</summary>\n\n```\nline one\nline two\n```\n\n</details>" in (
-        result
-    )
-    assert (
-        "<details>\n<summary>Diagnostics</summary>\n\n```\nsee journal.jsonl\n```\n\n</details>"
-        in result
-    )
+    assert "**notes**\n\n```\nline one\nline two\n```" in result
+    assert "**Diagnostics**\n\n```\nsee journal.jsonl\n```" in result
 
 
 def test_render_task_notification_none_without_tag() -> None:
@@ -196,17 +187,13 @@ def test_render_task_notification_result_decodes_short_and_long_fields() -> None
     raw = '{"question": "short", "notes": "line one\\nline two"}'
     result = render_task_notification_result(raw)
     assert "- **question**: short" in result
-    assert "<details>\n<summary>notes</summary>\n\n```\nline one\nline two\n```\n\n</details>" in (
-        result
-    )
+    assert "**notes**\n\n```\nline one\nline two\n```" in result
 
 
 def test_render_task_notification_result_nested_value_gets_json_block() -> None:
     raw = '{"items": [1, 2, 3]}'
     result = render_task_notification_result(raw)
-    expected = (
-        "<details>\n<summary>items</summary>\n\n```json\n[\n  1,\n  2,\n  3\n]\n```\n\n</details>"
-    )
+    expected = "**items**\n\n```json\n[\n  1,\n  2,\n  3\n]\n```"
     assert result == expected
 
 
@@ -282,7 +269,7 @@ def test_render_content_block_tool_result_error_and_result() -> None:
 def test_render_content_block_thinking_empty_and_nonempty() -> None:
     assert render_content_block({"type": "thinking", "thinking": "   "}) == ""
     thinking = render_content_block({"type": "thinking", "thinking": "pondering"})
-    assert "<summary>Thinking</summary>" in thinking
+    assert "**Thinking**" in thinking
     assert "pondering" in thinking
 
 
@@ -330,7 +317,7 @@ def test_render_content_block_tool_use_generic_json() -> None:
     assert "description" not in block.split("```json")[1]
 
 
-def test_render_content_block_tool_use_multiline_field_uses_collapsible_block() -> None:
+def test_render_content_block_tool_use_multiline_field_gets_labelled_block() -> None:
     script = "export const meta = {\n  name: 'x',\n}\n"
     block = render_content_block(
         {
@@ -340,7 +327,7 @@ def test_render_content_block_tool_use_multiline_field_uses_collapsible_block() 
         }
     )
     assert "**Tool call: `Workflow`** — run it" in block
-    assert "<details>\n<summary>script</summary>" in block
+    assert "**script**" in block
     assert script in block
     # The raw script must not also appear JSON-escaped on a single line.
     assert "\\n" not in block
@@ -353,9 +340,7 @@ def test_render_tool_input_empty_dict_renders_empty_json() -> None:
 def test_render_tool_input_mixes_scalars_and_multiline_fields() -> None:
     rendered = render_tool_input({"pattern": "*.py", "prompt": "line one\nline two"})
     assert '```json\n{\n  "pattern": "*.py"\n}\n```' in rendered
-    assert "<details>\n<summary>prompt</summary>\n\n```\nline one\nline two\n```\n\n</details>" in (
-        rendered
-    )
+    assert "**prompt**\n\n```\nline one\nline two\n```" in rendered
 
 
 def test_stringify_tool_result_content_variants() -> None:

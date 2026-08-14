@@ -9,8 +9,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-_PROTECTED_HTML_TAGS = ("<details>", "<summary>", "</summary>", "</details>")
-
 _BLOCKQUOTE_PREFIX_RE = re.compile(r"^(?:>\s?)+")
 
 
@@ -43,21 +41,10 @@ def escape_html_outside_code(text: str) -> str:
     vanish, worst case an unclosed tag like <workspace> swallows the rest of
     the document). Inside a ``` block or a `...` span, this risk does not
     exist, so we leave it as-is.
-
-    Preserves the <details>/<summary> tags we deliberately inject for
-    collapsible ("Thinking") sections.
     """
-    sentinels: dict[str, str] = {}
-    protected = text
-    for i, tag in enumerate(_PROTECTED_HTML_TAGS):
-        if tag in protected:
-            token = f"\x00TAG{i}\x00"
-            protected = protected.replace(tag, token)
-            sentinels[token] = tag
-
     in_fence = False
     out_lines: list[str] = []
-    for line in protected.split("\n"):
+    for line in text.split("\n"):
         if line.strip().startswith("```"):
             in_fence = not in_fence
             out_lines.append(line)
@@ -66,11 +53,7 @@ def escape_html_outside_code(text: str) -> str:
             out_lines.append(line)
             continue
         out_lines.append(_escape_line_outside_inline_code(line))
-    result = "\n".join(out_lines)
-
-    for token, tag in sentinels.items():
-        result = result.replace(token, tag)
-    return result
+    return "\n".join(out_lines)
 
 
 def fmt_ts(ts: str | None) -> str:
@@ -204,8 +187,8 @@ def render_tool_invocation(text: str) -> str | None:
     The ``args`` value is a JSON-escaped string -- often a multi-line prompt
     of thousands of characters -- so rendered as-is it shows up as a single
     line with literal ``\\n`` sequences. Splits the call into its fields and
-    unescapes them, giving a long field like ``args`` its own collapsible
-    code block. Returns None if the text has no such trailing call, so the
+    unescapes them, giving a long field like ``args`` its own labelled code
+    block. Returns None if the text has no such trailing call, so the
     caller falls back to normal rendering; text preceding the call (already
     readable prose) is preserved as-is.
     """
@@ -224,7 +207,7 @@ def render_tool_invocation(text: str) -> str | None:
         except ValueError:
             value = field_match.group("value")
         if "\n" in value:
-            parts.append(f"<details>\n<summary>{key}</summary>\n\n```\n{value}\n```\n\n</details>")
+            parts.append(f"**{key}**\n\n```\n{value}\n```")
         else:
             parts.append(f"- `{key}`: {value}")
 
@@ -311,11 +294,11 @@ def _parse_json_maybe_truncated(text: str) -> tuple[Any, str | None]:
 def _render_result_field(key: str, value: Any) -> str:
     if isinstance(value, str):
         if "\n" in value or len(value) > 150:
-            return f"<details>\n<summary>{key}</summary>\n\n```\n{value}\n```\n\n</details>"
+            return f"**{key}**\n\n```\n{value}\n```"
         return f"- **{key}**: {value}"
     if isinstance(value, dict | list):
         body = json.dumps(value, ensure_ascii=False, indent=2)
-        return f"<details>\n<summary>{key}</summary>\n\n```json\n{body}\n```\n\n</details>"
+        return f"**{key}**\n\n```json\n{body}\n```"
     return f"- **{key}**: {json.dumps(value)}"
 
 
@@ -427,9 +410,7 @@ def render_task_notification(text: str) -> str | None:
 
     if "diagnostics" in fields:
         diagnostics = fields["diagnostics"].strip()
-        parts.append(
-            f"<details>\n<summary>Diagnostics</summary>\n\n```\n{diagnostics}\n```\n\n</details>"
-        )
+        parts.append(f"**Diagnostics**\n\n```\n{diagnostics}\n```")
 
     return "\n\n".join(parts)
 
@@ -478,9 +459,8 @@ def render_tool_input(input_: dict[str, Any]) -> str:
     A naive ``json.dumps`` of the whole dict turns any multi-line string
     value (e.g. a Workflow script, a long prompt) into a single escaped
     line with literal ``\\n`` sequences -- unreadable, and can span tens of
-    thousands of characters. Such values get their own collapsible block
-    (same ``<details>`` pattern as "Thinking" sections) instead; the
-    remaining scalar fields are kept together as compact JSON.
+    thousands of characters. Such values get their own labelled code block
+    instead; the remaining scalar fields are kept together as compact JSON.
     """
     multiline = {k: v for k, v in input_.items() if isinstance(v, str) and "\n" in v}
     scalars = {k: v for k, v in input_.items() if k not in multiline}
@@ -489,7 +469,7 @@ def render_tool_input(input_: dict[str, Any]) -> str:
     if scalars:
         parts.append(f"```json\n{json.dumps(scalars, ensure_ascii=False, indent=2)}\n```")
     for key, value in multiline.items():
-        parts.append(f"<details>\n<summary>{key}</summary>\n\n```\n{value}\n```\n\n</details>")
+        parts.append(f"**{key}**\n\n```\n{value}\n```")
     return "\n\n".join(parts) if parts else "```json\n{}\n```"
 
 
@@ -503,7 +483,7 @@ def render_content_block(block: dict[str, Any]) -> str:
         text = block.get("thinking", "")
         if not text.strip():
             return ""
-        return f"<details>\n<summary>Thinking</summary>\n\n{text}\n\n</details>"
+        return f"**Thinking**\n\n{text}"
 
     if btype == "tool_use":
         name = block.get("name", "tool")
