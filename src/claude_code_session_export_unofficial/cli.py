@@ -60,7 +60,7 @@ from typing import Any
 
 from .anonymize import Anonymizer
 from .discovery import find_project_dirs, resolve_claude_dir
-from .export import export_session, session_preview, write_index
+from .export import build_index_entries, export_session, session_preview, write_index
 
 
 def main() -> None:
@@ -132,13 +132,14 @@ def main() -> None:
             "Check the workspace path, or use --session to target a specific session."
         )
 
-    jsonl_files: list[Path] = []
+    all_jsonl_files: list[Path] = []
     for d in project_dirs:
-        jsonl_files.extend(sorted(d.glob("*.jsonl")))
+        all_jsonl_files.extend(sorted(d.glob("*.jsonl")))
 
+    jsonl_files = all_jsonl_files
     if args.session_ids:
         wanted = set(args.session_ids)
-        jsonl_files = [f for f in jsonl_files if f.stem in wanted]
+        jsonl_files = [f for f in all_jsonl_files if f.stem in wanted]
         missing = wanted - {f.stem for f in jsonl_files}
         if missing:
             print(f"Warning: sessions not found: {', '.join(sorted(missing))}")
@@ -166,7 +167,8 @@ def main() -> None:
         )
         summaries.append(summary)
 
-    write_index(output_root, workspace, summaries, anonymizer)
+    entries = build_index_entries(output_root, claude_dir, all_jsonl_files, summaries)
+    write_index(output_root, workspace, entries, anonymizer)
     print()
     print(f"Export complete: {output_root}")
 

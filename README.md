@@ -64,7 +64,8 @@ claude-code-session-export-unofficial C:\Users\me\.claude . -o backup_sessions
 
 ### Output layout
 
-For each exported session, a `<output>/<session_id>/` folder is created containing:
+For each exported session, a `<output>/<date> - <title> - <session_id>/` folder
+is created containing:
 
 - `session.jsonl` — the raw, anonymized conversation.
 - `session.md` — the same conversation, converted to readable Markdown.
@@ -73,7 +74,15 @@ For each exported session, a `<output>/<session_id>/` folder is created containi
 - `session-env/` — the session's recorded environment variables (if any).
 - `session-info.json` — session metadata (if found).
 
-A top-level `README.md` index summarizing all exported sessions is written to the output folder.
+The session ID suffix is what makes re-importing safe: the date changes if the
+conversation is later continued, and the title can be rewritten, but the ID
+stays constant, so re-running the export against the same workspace refreshes
+that folder (renaming it if the date/title changed) instead of duplicating it.
+
+A top-level `README.md` checklist is written to the output folder, listing
+every session known for the workspace — checked if its export folder
+currently exists on disk, unchecked otherwise (e.g. if it was deleted, or
+skipped via `--session`).
 
 ## Development
 

@@ -15,18 +15,45 @@ from .markdown import fmt_ts, session_to_markdown
 _INVALID_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _MAX_DIR_NAME_LENGTH = 150
 
+_INDEX_LINE_RE = re.compile(
+    r"^- \[(?P<checked>[ xX])\] `(?P<session_id>[^`]*)` — (?P<title>.*) — "
+    r"updated (?P<updated>.*?) — (?P<plans>\d+) plan\(s\) copied\s*$"
+)
 
-def sanitize_filename_component(text: str) -> str:
+
+def sanitize_filename_component(text: str, max_length: int = _MAX_DIR_NAME_LENGTH) -> str:
     cleaned = _INVALID_FILENAME_CHARS_RE.sub("_", text).strip().rstrip(". ")
-    return cleaned[:_MAX_DIR_NAME_LENGTH].rstrip(". ") or "untitled"
+    return cleaned[:max_length].rstrip(". ") or "untitled"
 
 
 def build_session_dir_name(last_ts: str | None, title: str | None, session_id: str) -> str:
     # ":" is invalid in Windows folder names, so the timestamp is rendered
     # with dashes instead (still lexically sortable).
     date_part = fmt_ts(last_ts).replace(":", "-") if last_ts else "unknown-date"
-    title_part = title.strip() if title and title.strip() else session_id
-    return sanitize_filename_component(f"{date_part} - {title_part}")
+    # The session ID is always appended, rather than only used as a title
+    # fallback: neither the date (the conversation can be continued later)
+    # nor the title (it can be rewritten) are stable across re-imports, so
+    # the ID is what lets a re-import find and refresh the same folder
+    # instead of creating a duplicate.
+    session_part = sanitize_filename_component(session_id)
+    budget = max(_MAX_DIR_NAME_LENGTH - len(date_part) - len(session_part) - 6, 1)
+    title_part = (
+        sanitize_filename_component(title, budget) if title and title.strip() else "untitled"
+    )
+    return f"{date_part} - {title_part} - {session_part}"
+
+
+def find_existing_session_dir(output_root: Path, session_id: str) -> Path | None:
+    """Finds a previously exported folder for this session, matched by its
+    trailing " - <session_id>" suffix (the only part of the folder name that
+    stays stable across re-imports)."""
+    if not output_root.is_dir():
+        return None
+    suffix = f" - {sanitize_filename_component(session_id)}"
+    for d in sorted(output_root.iterdir()):
+        if d.is_dir() and d.name.endswith(suffix):
+            return d
+    return None
 
 
 def extract_title_and_last_ts(
@@ -77,6 +104,14 @@ def export_session(
     title, last_ts = extract_title_and_last_ts(events)
 
     session_out = output_root / build_session_dir_name(last_ts, title, session_id)
+    existing_dir = find_existing_session_dir(output_root, session_id)
+    if existing_dir is not None and existing_dir != session_out:
+        existing_dir.rename(session_out)
+        log(
+            f"[{session_id}] already imported, refreshing: "
+            f"{existing_dir.name} -> {session_out.name}",
+            verbose,
+        )
     session_out.mkdir(parents=True, exist_ok=True)
 
     # 1) Raw conversation
@@ -118,22 +153,110 @@ def export_session(
                 info_text = anonymizer.apply(json.dumps(data, ensure_ascii=False, indent=2))
                 (session_out / "session-info.json").write_text(info_text, encoding="utf-8")
 
-    return {"session_id": session_id, "title": title, "plans": len(plan_paths)}
+    return {"session_id": session_id, "title": title, "last_ts": last_ts, "plans": len(plan_paths)}
+
+
+def parse_index(output_root: Path) -> dict[str, dict[str, Any]]:
+    """Reads a previously written README.md, if any, to recover the sessions
+    it already listed. Used so a session removed from ``~/.claude`` since the
+    last export (and thus no longer discoverable there) still keeps its row,
+    with its checkbox re-evaluated against the current export folder."""
+    readme = output_root / "README.md"
+    if not readme.is_file():
+        return {}
+    entries: dict[str, dict[str, Any]] = {}
+    for line in readme.read_text(encoding="utf-8").splitlines():
+        m = _INDEX_LINE_RE.match(line)
+        if not m:
+            continue
+        title = m.group("title")
+        session_id = m.group("session_id")
+        entries[session_id] = {
+            "session_id": session_id,
+            "title": None if title == "-" else title,
+            "updated": m.group("updated"),
+            "plans": int(m.group("plans")),
+            "checked": m.group("checked").lower() == "x",
+        }
+    return entries
+
+
+def build_index_entries(
+    output_root: Path,
+    claude_dir: Path,
+    all_jsonl_files: list[Path],
+    summaries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Builds every README row: one for each session known for this
+    workspace, whether or not it was (re-)exported in this run. A row is
+    checked if and only if its export folder currently exists on disk, so
+    that a manually deleted export un-checks itself on the next run."""
+    exported_by_id = {s["session_id"]: s for s in summaries}
+    previous = parse_index(output_root)
+    seen_ids: set[str] = set()
+    entries: list[dict[str, Any]] = []
+
+    for jsonl_file in all_jsonl_files:
+        session_id = jsonl_file.stem
+        seen_ids.add(session_id)
+        if session_id in exported_by_id:
+            s = exported_by_id[session_id]
+            entries.append(
+                {
+                    "session_id": session_id,
+                    "title": s["title"],
+                    "updated": fmt_ts(s["last_ts"]) or "-",
+                    "sort_key": s["last_ts"] or "",
+                    "plans": s["plans"],
+                    "checked": True,
+                }
+            )
+            continue
+        events = load_jsonl(jsonl_file)
+        title, last_ts = extract_title_and_last_ts(events)
+        plans = len(collect_plan_paths(events, claude_dir))
+        entries.append(
+            {
+                "session_id": session_id,
+                "title": title,
+                "updated": fmt_ts(last_ts) or "-",
+                "sort_key": last_ts or "",
+                "plans": plans,
+                "checked": find_existing_session_dir(output_root, session_id) is not None,
+            }
+        )
+
+    for session_id, old_entry in previous.items():
+        if session_id in seen_ids:
+            continue
+        entries.append(
+            {
+                **old_entry,
+                "sort_key": old_entry["updated"],
+                "checked": find_existing_session_dir(output_root, session_id) is not None,
+            }
+        )
+
+    entries.sort(key=lambda e: e["sort_key"])
+    return entries
 
 
 def write_index(
     output_root: Path,
     workspace: Path,
-    summaries: list[dict[str, Any]],
+    entries: list[dict[str, Any]],
     anonymizer: Anonymizer,
 ) -> None:
     lines = ["# Claude Code Session Export", ""]
     lines.append(f"Workspace: `{workspace}`")
     lines.append("")
-    lines.append("| Session ID | Title | Plans copied |")
-    lines.append("|---|---|---|")
-    for s in summaries:
-        lines.append(f"| `{s['session_id']}` | {s['title'] or '-'} | {s['plans']} |")
+    for e in entries:
+        checkbox = "x" if e["checked"] else " "
+        title = e["title"] or "-"
+        lines.append(
+            f"- [{checkbox}] `{e['session_id']}` — {title} — updated {e['updated']} — "
+            f"{e['plans']} plan(s) copied"
+        )
     lines.append("")
     text = anonymizer.apply_markdown("\n".join(lines))
     (output_root / "README.md").write_text(text, encoding="utf-8")
