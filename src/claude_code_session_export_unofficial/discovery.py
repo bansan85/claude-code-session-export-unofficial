@@ -121,8 +121,13 @@ def collect_plan_paths(events: list[dict[str, Any]], claude_dir: Path) -> list[P
             continue
         p = Path(tracking_path)
         try:
-            if p.resolve().parent == plans_dir and p.is_file():
-                found.add(p.resolve())
+            resolved = p.resolve()
         except OSError:
             continue
+        if resolved.parent != plans_dir:
+            continue
+        if resolved.is_file():
+            found.add(resolved)
+        else:
+            log(f"Warning: plan referenced by session no longer exists on disk: {resolved}")
     return sorted(found)

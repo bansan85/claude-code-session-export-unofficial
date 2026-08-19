@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -154,6 +155,35 @@ def test_cli_main_end_to_end_smoke(
     assert (session_dirs[0] / "session.md").is_file()
     out = capsys.readouterr().out
     assert f"  - {fake_claude_home.session_id} -> {session_dirs[0].name}" in out
+    assert "Export complete" in out
+
+
+def test_cli_main_succeeds_when_workspace_directory_was_deleted(
+    fake_claude_home: FakeClaudeHome,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace_str = str(fake_claude_home.workspace.resolve())
+    shutil.rmtree(fake_claude_home.workspace)
+
+    output_root = tmp_path / "cli-out"
+    argv = [
+        "prog",
+        str(fake_claude_home.home),
+        workspace_str,
+        "-o",
+        str(output_root),
+    ]
+    monkeypatch.setattr("sys.argv", argv)
+
+    main()
+
+    session_dirs = [d for d in output_root.iterdir() if d.is_dir()]
+    assert len(session_dirs) == 1
+    session_md = (session_dirs[0] / "session.md").read_text(encoding="utf-8")
+    assert workspace_str not in session_md
+    out = capsys.readouterr().out
     assert "Export complete" in out
 
 

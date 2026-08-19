@@ -22,9 +22,14 @@ Examples:
     # Explicitly target the .claude folder and choose the output location
     claude-code-session-export-unofficial C:\\Users\\me\\.claude . -o backup_sessions
 
+    # The workspace folder was since deleted; sessions are still found by
+    # matching the .claude/projects folder against this literal path
+    claude-code-session-export-unofficial %USERPROFILE% D:\\deleted-project -o backup_sessions
+
 Useful options:
     --session <id>   Only process one specific session (repeatable)
-    -o, --output     Output folder (default: <workspace>/claude-sessions-export)
+    -o, --output     Output folder (default: <workspace>/claude-sessions-export;
+                     specify explicitly if the workspace no longer exists on disk)
     -v, --verbose    Show operation details
 
 The script always copies the raw conversation, its Markdown conversion, the
@@ -70,12 +75,16 @@ def main() -> None:
     )
     parser.add_argument(
         "workspace",
-        help="The current workspace/project directory to retrieve sessions for.",
+        help="The current workspace/project directory to retrieve sessions for. "
+        "Does not need to still exist on disk (e.g. if the project folder was "
+        "later deleted), as long as the exact original path is given.",
     )
     parser.add_argument(
         "-o",
         "--output",
-        help="Output folder (default: <workspace>/claude-sessions-export).",
+        help="Output folder (default: <workspace>/claude-sessions-export). Specify "
+        "this explicitly if the workspace directory no longer exists, since the "
+        "default location can then fail to be created.",
     )
     parser.add_argument(
         "--session",
@@ -94,8 +103,6 @@ def main() -> None:
 
     claude_dir = resolve_claude_dir(Path(args.claude_home))
     workspace = Path(args.workspace).expanduser().resolve()
-    if not workspace.is_dir():
-        raise SystemExit(f"Workspace does not exist: {workspace}")
 
     output_root = (
         Path(args.output).expanduser().resolve()

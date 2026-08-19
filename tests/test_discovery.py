@@ -102,3 +102,16 @@ def test_collect_plan_paths_filters_by_parent_and_existence(
     }
     plan_paths = collect_plan_paths([*events, other_delta], fake_claude_home.claude_dir)
     assert plan_paths == [fake_claude_home.plan_path.resolve()]
+
+
+def test_collect_plan_paths_warns_on_missing_plan_file(
+    fake_claude_home: FakeClaudeHome, capsys: pytest.CaptureFixture[str]
+) -> None:
+    events = load_jsonl(fake_claude_home.jsonl_file)
+    missing_plan = fake_claude_home.claude_dir / "plans" / "deleted-plan.md"
+    ghost_delta = {"type": "file-history-delta", "trackingPath": str(missing_plan)}
+
+    plan_paths = collect_plan_paths([*events, ghost_delta], fake_claude_home.claude_dir)
+
+    assert plan_paths == [fake_claude_home.plan_path.resolve()]
+    assert str(missing_plan.resolve()) in capsys.readouterr().out
